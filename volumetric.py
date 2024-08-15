@@ -3,19 +3,30 @@ import numpy as np
 import os
 import vtk
 from vtk.util import numpy_support
+import re
 
-# Function to load MRI slices from a directory
+# Function to load MRI slices from a directory with correct numerical sorting
 def load_mri_slices(directory):
     slices = []
-    for filename in sorted(os.listdir(directory)):
-        if filename.endswith('.jpg'):  # Adjust this if your images are in a different format
+    # Regular expression to extract the slice number
+    slice_pattern = re.compile(r'axial_slice(\d+)\.png')
+    
+    # Sort files based on the extracted numerical part
+    sorted_filenames = sorted(
+        os.listdir(directory), 
+        key=lambda x: int(slice_pattern.search(x).group(1))
+    )
+    
+    for filename in sorted_filenames:
+        if filename.endswith('.png'):
             img = cv2.imread(os.path.join(directory, filename), cv2.IMREAD_GRAYSCALE)
             if img is not None:
                 slices.append(img)
     return slices
 
 # Load the MRI slices
-mri_slices = load_mri_slices('./Moderate Impairment/')
+mri_slices = load_mri_slices('./12/')
+# mri_slices = load_mri_slices('./Axial_slices/')
 if not mri_slices:
     print("Error: No MRI slices loaded")
     exit()
@@ -30,8 +41,6 @@ mri_volume = np.array([cv2.normalize(slice, None, 0, 255, cv2.NORM_MINMAX) for s
 # Check the shape of the volume
 print(f'Volume shape: {mri_volume.shape}')  # Should be (number_of_slices, height, width)
 
-
-
 # Convert the numpy array to a VTK image data object
 def numpy_to_vtk_image(numpy_array):
     depth, height, width = numpy_array.shape
@@ -45,35 +54,20 @@ def numpy_to_vtk_image(numpy_array):
 # Create VTK image from numpy volume
 vtk_image = numpy_to_vtk_image(mri_volume)
 
-# Create volume mapper
-volume_mapper = vtk.vtkFixedPointVolumeRayCastMapper()
-volume_mapper.SetInputData(vtk_image)
+# Extract the surface using vtkMarchingCubes
+marching_cubes = vtk.vtkMarchingCubes()
+marching_cubes.SetInputData(vtk_image)
+marching_cubes.SetValue(0, 80)  # Set the threshold value for the surface
 
-# Create volume properties
-volume_property = vtk.vtkVolumeProperty()
-volume_property.ShadeOn()
-volume_property.SetInterpolationTypeToLinear()
-
-# Create composite function
-composite_function = vtk.vtkPiecewiseFunction()
-composite_function.AddPoint(0, 0.0)
-composite_function.AddPoint(255, 1.0)
-volume_property.SetScalarOpacity(composite_function)
-
-# Create color function
-color_function = vtk.vtkColorTransferFunction()
-color_function.AddRGBPoint(0, 0.0, 0.0, 0.0)
-color_function.AddRGBPoint(255, 1.0, 1.0, 1.0)
-volume_property.SetColor(color_function)
-
-# Create volume actor
-volume = vtk.vtkVolume()
-volume.SetMapper(volume_mapper)
-volume.SetProperty(volume_property)
+# Create a polydata mapper and actor
+mapper = vtk.vtkPolyDataMapper()
+mapper.SetInputConnection(marching_cubes.GetOutputPort())
+actor = vtk.vtkActor()
+actor.SetMapper(mapper)
 
 # Create renderer
 renderer = vtk.vtkRenderer()
-renderer.AddVolume(volume)
+renderer.AddActor(actor)
 renderer.SetBackground(0, 0, 0)
 
 # Create render window
@@ -88,3 +82,8 @@ render_window_interactor.SetRenderWindow(render_window)
 render_window.Render()
 render_window_interactor.Start()
 
+# Save the surface mesh to an .obj file
+obj_writer = vtk.vtkOBJWriter()
+obj_writer.SetFileName('mri_surface.obj')
+obj_writer.SetInputConnection(marching_cubes.GetOutputPort())
+obj_writer.Write()
